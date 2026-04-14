@@ -1,0 +1,98 @@
+name: Lab4 CI/CD Pipeline
+
+on:
+  push:
+    branches: [ main, master]
+
+jobs:
+
+# =========================
+# JOB 1: TRAIN (CI)
+# =========================
+  train:
+    runs-on: ubuntu-latest
+
+    outputs:
+      mse: ${{ steps.metrics.outputs.mse }}
+
+    steps:
+    - name: Checkout Code
+      uses: actions/checkout@v4
+
+    - name: Setup Python 3.11
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
+
+    - name: Install Dependencies
+      run: pip install -r requirements.txt
+
+    - name: Run Training Script
+      run: |
+        echo "Training started - Pawan 2022bcs0061"
+        python scripts/train.py
+
+    - name: Extract MSE
+      id: metrics
+      run: |
+        MSE=$(python -c "import json;print(json.load(open('output/metrics.json'))['mse'])")
+        echo "mse=$MSE" >> $GITHUB_OUTPUT
+
+    - name: Upload Model & Metrics
+      uses: actions/upload-artifact@v4
+      with:
+        name: model-artifacts
+        path: output/
+
+# =========================
+# JOB 2: DEPLOY (CD)
+# =========================
+  deploy:
+    needs: train
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout Code
+      uses: actions/checkout@v4
+
+    - name: Download Artifacts
+      uses: actions/download-artifact@v4
+      with:
+        name: model-artifacts
+        path: output/
+
+    - name: Install bc
+      run: sudo apt-get install -y bc
+
+    - name: Compare MSE with BEST_MSE
+      id: compare
+      run: |
+        CURRENT_MSE=${{ needs.train.outputs.mse }}
+        BEST_MSE=${{ vars.BEST_MSE }}
+
+        echo "Current MSE: $CURRENT_MSE"
+        echo "Best MSE: $BEST_MSE"
+
+        if (( $(echo "$CURRENT_MSE < $BEST_MSE" | bc -l) )); then
+          echo "improved=true" >> $GITHUB_OUTPUT
+        else
+          echo "improved=false" >> $GITHUB_OUTPUT
+        fi
+
+    - name: Stop if not improved
+      if: steps.compare.outputs.improved == 'false'
+      run: |
+        echo "2022BCS0061 ---- Metric did not improve"
+        exit 0
+
+    - name: Login to Docker Hub
+      run: echo "${{ secrets.DOCKER_PASSWORD }}" | docker login -u "${{ secrets.DOCKER_USERNAME }}" --password-stdin
+
+    - name: Build Docker Image
+      run: docker build -t ${{ secrets.DOCKER_USERNAME }}/Pawan_2022bcs0061_lab4:v1 .
+
+    - name: Push Docker Image
+      run: docker push ${{ secrets.DOCKER_USERNAME }}/Pawan_2022bcs0061_lab4:v1
+
+    - name: Build Docker Image
+      run: docker build --no-cache -t ${{ secrets.DOCKER_USERNAME }}/Pawan_2022bcs0061_lab4:v1 .
